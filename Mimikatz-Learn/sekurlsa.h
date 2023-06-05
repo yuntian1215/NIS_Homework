@@ -152,6 +152,30 @@ typedef struct _KIWI_BCRYPT_HANDLE_KEY {
     PVOID unk0;
 } KIWI_BCRYPT_HANDLE_KEY, * PKIWI_BCRYPT_HANDLE_KEY;
 
+typedef struct _MSV1_0_PRIMARY_CREDENTIAL_10_1607 {
+    LSA_UNICODE_STRING LogonDomainName;
+    LSA_UNICODE_STRING UserName;
+    PVOID pNtlmCredIsoInProc;
+    BOOLEAN isIso;
+    BOOLEAN isNtOwfPassword;
+    BOOLEAN isLmOwfPassword;
+    BOOLEAN isShaOwPassword;
+    BOOLEAN isDPAPIProtected;
+    BYTE align0;
+    BYTE align1;
+    BYTE align2;
+    DWORD unkD; // 1/2
+#pragma pack(push, 2)
+    WORD isoSize;  // 0000
+    BYTE DPAPIProtected[16];
+    DWORD align3; // 00000000
+#pragma pack(pop) 
+    BYTE NtOwfPassword[16];
+    BYTE LmOwfPassword[16];
+    BYTE ShaOwPassword[20];
+    /* buffer */
+} MSV1_0_PRIMARY_CREDENTIAL_10_1607, * PMSV1_0_PRIMARY_CREDENTIAL_10_1607;
+
 //* End structs and offsets *//
 
 VOID PrepareUnprotectLsassMemoryKeys();

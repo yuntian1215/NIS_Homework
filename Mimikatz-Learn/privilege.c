@@ -5,11 +5,37 @@
  *  请将以下函数填写完整，并实现对应的功能              *
  *    - EnableSeDebugPrivilege                       *
  *****************************************************/
-/// 推荐使用API: OpenProcessToken() LookupPrivilegeValueW() AdjustTokenPrivileges()
+ /// 推荐使用API: OpenProcessToken() LookupPrivilegeValueW() AdjustTokenPrivileges()
 BOOL EnableSeDebugPrivilege() {
     //
     // ~ 30 lines of code
     // 
+    HANDLE hToken;
+    BOOL bRet = OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &hToken);
+    if (!bRet) {
+        printf("OpenProcessToken error: %u\n", GetLastError());
+        return FALSE;
+    }
+
+    TOKEN_PRIVILEGES tp;
+    LUID Luid;
+
+    if (!LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &Luid)) {
+        printf("LookupPrivilegeValueW error: %u\n", GetLastError());
+        return FALSE;
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = Luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    if (!AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), (PTOKEN_PRIVILEGES)NULL, (PDWORD)NULL)) {
+        printf("AdjustTokenPrivileges error: %u\n", GetLastError());
+        return FALSE;
+    }
+
+    if (GetLastError() == ERROR_SUCCESS) return TRUE;
+
     return FALSE;
 }
 
@@ -38,7 +64,8 @@ VOID AdjustProcessPrivilege() {
         printf("AdjustProcessPrivilege() not working ...\n");
         printf("Are you running as Admin ? ...\n");
         ExitProcess(-1);
-    } else {
+    }
+    else {
         printf("\n[+] AdjustProcessPrivilege() ok .\n\n");
     }
 }

